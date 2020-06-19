@@ -1,0 +1,165 @@
+library(foreign)
+setwd("/Users/Pomelo/Documents/R Practising/Reanalying for Dedelow/Myanimal in Dedelow/newdata/")
+gts<- read.table("/Users/Pomelo/Documents/R Practising/Reanalying for Dedelow/Myanimal in Dedelow/newdata/Genotyping data- Dedelow.txt", sep="\t",  na.strings = c("","-" ,"NA","no"), fill = TRUE,header = TRUE,colClasses = "character")
+bestand<- read.dbf("/Users/Pomelo/Documents/R Practising/Reanalying for Dedelow/BESTAND.DBF")
+mp<- read.table("/Users/Pomelo/Documents/R Practising/Dedelow/305data-Dedelow.txt", sep = "\t",fill = TRUE, header = TRUE)
+
+# Figure out MKG == NA or MKG == 0, and remove those from the data 
+noData <- which(is.na(mp[, "MKG"]) | mp[, "MKG"] == 0 | is.na(mp[, "MKG100"]) | mp[, "MKG100"] ==0 | is.na(mp[, "MKG200_N"]) | mp[, "MKG200_N"]==0)
+mp<- mp[-noData,]
+mp <- mp[which(mp[, "OHR"] %in% gts[, "ID"]),]
+# How many genotyped cows do not have milk production data ?
+length(which(!(gts[, "ID"] %in% mp[, "OHR"])))
+# Remove the cows without SCS
+gts <- gts[-which(!(gts[, "ID"] %in% mp[, "OHR"])),]
+mmatrix <- NULL
+for(r in 1:nrow(mp)){
+  ohr <- mp[r, "OHR"]
+  inBestand <- which(as.character(bestand[, "OHR"]) == as.character(ohr))
+  birthdate <- NA
+  firstcalf <- NA
+  if(length(inBestand) == 1){ 
+    birthdate <- as.character(bestand[inBestand, "GEBURT"])
+    firstcalf <- as.character(bestand[inBestand, "KALBUNG1"])
+    firstcalfindays <- as.character(as.Date(firstcalf, format="%Y-%m-%d") - as.Date(birthdate, format="%Y-%m-%d"))
+    fatherid<- as.character(bestand[inBestand, "VATER"])
+    leavedate<- as.character(bestand[inBestand, "ABGANG"])
+  }
+  
+  mpdata <- c(as.character(mp[r, "OHR"]), birthdate, firstcalfindays,firstcalf,leavedate,fatherid,
+               as.character(mp[r, "KALBUNG"]), 
+               as.character(mp[r, "LAKTATION"]), 
+               as.character(mp[r, "MKG100"]),as.character(mp[r, "MKG200_N"]),as.character(mp[r, "MKG"]), as.character(mp[r, "FETTKG100"]), as.character(mp[r, "FETTKG200"]),as.character(mp[r, "FETTKG"]),as.character(mp[r, "EIWEISSKG1"]),as.character(mp[r, "EIWEISSKG2"]),as.character(mp[r, "EIWEISSKGG"]))
+  mpdata <- c(mpdata, as.character(gts[which(as.character(gts[, "ID"]) == as.character(mp[r, "OHR"])), -1]))
+  
+  mmatrix <- rbind(mmatrix, mpdata)
+  
+}
+
+colnames(mmatrix) <- c("AnimalID", "Birthdate", "FirstCalfIndays","Afc","Leaveherdtime","Father","Calvingdate", "Lactation", "MKG100", "MKG200_N", "MKG", "FATKG100","FATKG200","FATKG","PROTEINKG100", "PROTEINKG200" , "PROTEINKG"  ,colnames(gts)[-1])
+rownames(mmatrix) <- 1:nrow(mmatrix)
+
+setwd("/Users/Pomelo/Documents/R Practising/Reanalying for Dedelow/Myanimal in Dedelow/newdata/")
+write.table(mmatrix, "phenotypes-milkproduction.Dedelow.txt", sep = "\t", quote= FALSE) ###quote 是否为字符型变量添加双引号
+
+#####
+mmatrix<-read.table("/Users/Pomelo/Documents/R Practising/Reanalying for Dedelow/Myanimal in Dedelow/newdata/phenotypes-milkproduction.Dedelow.txt", sep = "\t",header = TRUE)
+Mergingdata<-read.table("/Users/Pomelo/Documents/R Practising/Reanalying for Dedelow/Myanimal in Dedelow/newdata/Mergingdata.txt",sep = "\t",header = TRUE)
+
+phenotypes<- NULL
+for (i in 1:nrow(mmatrix)){
+  ohr1<- mmatrix[i,"AnimalID"]
+  inMerging<-which(as.character(Mergingdata[, "ID"]) == as.character(ohr1))
+  Code<- NA
+  if(length(inMerging) == 1){
+    Code<- as.numeric(Mergingdata[inMerging,"Animalcode"])
+  }
+  mastitiscode<- c(as.character(mmatrix[i, "AnimalID"]), Code )
+  phenotypes<- rbind(phenotypes, mastitiscode)
+}
+colnames(phenotypes)<-c("AnimalIDD", "Code")
+row.names(phenotypes)<- 1:nrow(phenotypes)
+Animalcode<-as.numeric(phenotypes[,"Code"])
+
+mmatrix<-mmatrix[,-18]
+mmatrix1<- cbind(mmatrix,Animalcode)
+
+####Get season
+calvingdates<- as.Date(as.character(mmatrix1[, "Calvingdate"]), format="%y/%m/%d")
+calvingmonth<- unlist(lapply(strsplit(as.character(calvingdates), "-"), "[", 2))
+calvingmonth<- as.numeric(calvingmonth)
+getSeason <- function(calvingmonth) {
+  ret <- rep(NA, length(calvingmonth))
+  ret[calvingmonth >= 3 & calvingmonth <= 5] <- "Spring"
+  ret[calvingmonth >= 6 & calvingmonth <= 8] <- "Summer"
+  ret[calvingmonth >= 9 & calvingmonth <= 11] <- "Fall"
+  ret[calvingmonth == 12 | calvingmonth == 1 | calvingmonth == 2] <- "Winter"
+  return(ret)
+}
+Calvingseason<- getSeason(calvingmonth)
+Calvingyear<- unlist(lapply(strsplit(as.character(calvingdates), "-"), "[", 1))
+mmatrix1<- cbind(mmatrix1, Calvingseason, Calvingyear)
+
+# Get the covariates we want to investigate in model building
+animal <- mmatrix1[, "AnimalID"]
+lactation <- as.factor(mmatrix1[, "Lactation"])
+birthyear <- unlist(lapply(strsplit(as.character(mmatrix1[,"Birthdate"]), "-"), "[", 1))
+calvlingyear <- mmatrix1[, "Calvingyear"]
+calvingseason<- mmatrix1[, "Calvingseason"]
+afc <- mmatrix1[, "FirstCalfIndays"]
+father<- mmatrix1[, "Father"]
+mkg100<- mmatrix1[, "MKG100"]
+mkg200<- mmatrix1[, "MKG200_N"]
+mkg<- mmatrix1[, "MKG"]
+fatkg100<- mmatrix1[, "FATKG100"]
+fatkg200<- mmatrix1[, "FATKG200"]
+fatkg<-mmatrix1[, "FATKG"]
+proteinkg100<- mmatrix1[, "PROTEINKG100"]
+proteinkg200<- mmatrix1[, "PROTEINKG200"]
+proteinkg<- mmatrix1[, "PROTEINKG"]
+
+# Combine all data into a matrix
+mdata <- data.frame(Y = as.numeric(proteinkg100), 
+                    Lact = as.factor(lactation),
+                    Animal = as.factor(animal),
+                    Birthyear = as.factor(birthyear),
+                    Calvingyear = as.factor(calvlingyear),
+                    Calvingseason = as.factor(calvingseason),
+                    Afc = as.factor(afc),
+                    Father= as.factor(father)
+)
+# Remove rows with missing data
+mdata<- na.omit(mdata)
+# Which covariates influence the phenotype?
+library(lme4)
+null.model <- lmer(Y ~ (1|Animal), data = mdata, REML = FALSE)
+
+model1 <- lmer(Y ~ Lact + (1|Animal), data = mdata, REML = FALSE)
+anova(model1, null.model) # < 2.2e-16 ***
+
+model2 <- lmer(Y ~ Calvingyear + (1|Animal), data = mdata, REML = FALSE)
+anova(model2, null.model) # < 2.2e-16 ***
+
+model3 <- lmer(Y ~ Calvingseason + (1|Animal), data = mdata, REML = FALSE)
+anova(model3, null.model) # < 2.279e-06 ***
+
+model4 <- lmer(Y ~ Birthyear + (1|Animal), data = mdata, REML = FALSE)
+anova(model4, null.model) # < 2.2e-16 ***
+
+model5 <- lmer(Y ~ Afc + (1|Animal), data = mdata, REML = FALSE)
+anova(model5, null.model) # <  0.7794
+
+model6 <- lmer(Y ~ Father + (1|Animal), data = mdata, REML = FALSE)
+anova(model6, null.model) # < 2.2e-16 ***
+
+###
+genotypes <- mmatrix1[,18:27]
+pvals <- NULL
+for (x in 1:ncol(genotypes)) {
+  # Combine all data into a matrix
+  mdata1 <- cbind(Y = as.numeric(proteinkg), 
+                      Marker = as.factor(genotypes[,x]),
+                      Lact = as.factor(lactation),
+                      Animal = as.factor(animal),
+                      Birthyear = as.factor(birthyear),
+                      Calvingyear = as.factor(calvlingyear),
+                      Calvingseason = as.factor(calvingseason),
+                      Afc = as.factor(afc),
+                      Father= as.factor(father)
+  )
+  
+  # Remove rows with missing data
+  hasMissing <- which(apply(apply(mdata1,1,is.na),2,sum) != 0)
+  if (length(hasMissing) > 0) { mdata1 <- mdata1[-hasMissing,] }
+  
+  # Run a null model (all significant and suggestive covariates) and another model including the marker
+  null.model <- lmer(Y ~ Lact + Birthyear + Calvingseason + Calvingyear + Father + (1|Animal), data = data.frame(mdata1), REML = FALSE)
+  markermodel <- lmer(Y ~ Lact + Birthyear + Calvingseason + Calvingyear + Father + Marker + (1|Animal), data = data.frame(mdata1), REML = FALSE)
+  
+  # Pvalue for the model
+  pval <- as.numeric(na.omit(anova(markermodel, null.model)[, "Pr(>Chisq)"]))
+  pvals <- c(pvals, pval)
+}
+names(pvals) <- colnames(genotypes)
+pvals
+
